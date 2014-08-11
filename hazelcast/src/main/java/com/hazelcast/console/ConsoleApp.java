@@ -50,7 +50,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.PrintStream;
 import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
 import java.lang.management.ManagementFactory;
@@ -86,8 +88,11 @@ public class ConsoleApp implements EntryListener, ItemListener, MessageListener 
     private static final int ONE_THOUSAND = 1000;
     private static final int ONE_HUNDRED = 100;
     private static final int ONE_HOUR = 3600;
+    private final InputStream input;
 
     private IQueue<Object> queue;
+    private volatile int processedCommands;
+    private PrintStream output;
 
     private ITopic<Object> topic;
 
@@ -112,14 +117,33 @@ public class ConsoleApp implements EntryListener, ItemListener, MessageListener 
     private volatile LineReader lineReader;
 
     private volatile boolean running;
+    private Exception stopException;
 
-    public ConsoleApp(HazelcastInstance hazelcast) {
+    public ConsoleApp(HazelcastInstance hazelcast, InputStream in, PrintStream out) {
         this.hazelcast = hazelcast;
+        this.input = in;
+        this.output = out;
     }
 
     public IQueue<Object> getQueue() {
         queue = hazelcast.getQueue(namespace);
         return queue;
+    }
+
+    public boolean isRunning() {
+        return running;
+    }
+
+    public Exception getStopReason() {
+        return stopException;
+    }
+
+    public String getNamespace() {
+        return namespace;
+    }
+
+    protected String getCommandPrefix() {
+        return "hazelcast[" + namespace + "] > ";
     }
 
     public ITopic<Object> getTopic() {
@@ -166,7 +190,12 @@ public class ConsoleApp implements EntryListener, ItemListener, MessageListener 
         running = false;
     }
 
-    public void start(String[] args) throws Exception {
+    public void stop(Exception e) {
+        stop();
+        stopException = e;
+    }
+
+    public void start(String[] args, boolean throwException) throws UnsupportedEncodingException {
         getMap().size();
         getList().size();
         getSet().size();
@@ -179,18 +208,31 @@ public class ConsoleApp implements EntryListener, ItemListener, MessageListener 
         }
 
         if (lineReader == null) {
-            lineReader = new DefaultLineReader();
+            lineReader = new DefaultLineReader(input);
         }
         running = true;
         while (running) {
-            print("hazelcast[" + namespace + "] > ");
+            print(getCommandPrefix());
             try {
                 final String command = lineReader.readLine();
-                handleCommand(command);
-            } catch (Throwable e) {
-                e.printStackTrace();
+                if (command != null) {
+                    handleCommand(command);
+                    processedCommands++;
+                } else {
+                    stop();
+                }
+            } catch (Exception e) {
+                if (throwException) {
+                    stop();
+                } else {
+                    e.printStackTrace();
+                }
             }
         }
+    }
+
+    public int getProcessedCommandCount() {
+        return processedCommands;
     }
 
     /**
@@ -201,8 +243,8 @@ public class ConsoleApp implements EntryListener, ItemListener, MessageListener 
 
         private BufferedReader in;
 
-        public DefaultLineReader() throws UnsupportedEncodingException {
-            in = new BufferedReader(new InputStreamReader(System.in, "UTF-8"));
+        public DefaultLineReader(InputStream input) throws UnsupportedEncodingException {
+            in = new BufferedReader(new InputStreamReader(input, "UTF-8"));
         }
 
 
@@ -1280,7 +1322,7 @@ public class ConsoleApp implements EntryListener, ItemListener, MessageListener 
         if (args.length > 2) {
             value = new byte[Integer.parseInt(args[2])];
         }
-        long t0 = Clock.currentTimeMillis();
+        long t0 = System.nanoTime();
         for (int i = 0; i < count; i++) {
             if (value == null) {
                 getQueue().offer("obj");
@@ -1289,6 +1331,7 @@ public class ConsoleApp implements EntryListener, ItemListener, MessageListener 
             }
         }
         long t1 = Clock.currentTimeMillis();
+
         print("size = " + getQueue().size() + ", " + count * ONE_THOUSAND / (t1 - t0) + " evt/s");
         if (value == null) {
             println("");
@@ -1638,13 +1681,13 @@ public class ConsoleApp implements EntryListener, ItemListener, MessageListener 
 
     public void println(Object obj) {
         if (!silent) {
-            System.out.println(obj);
+            output.println(obj);
         }
     }
 
     public void print(Object obj) {
         if (!silent) {
-            System.out.print(obj);
+            output.print(obj);
         }
     }
 
@@ -1667,8 +1710,8 @@ public class ConsoleApp implements EntryListener, ItemListener, MessageListener 
         for (int k = 1; k <= LOAD_EXECUTORS_COUNT; k++) {
             config.addExecutorConfig(new ExecutorConfig("e" + k).setPoolSize(k));
         }
-        ConsoleApp consoleApp = new ConsoleApp(Hazelcast.newHazelcastInstance(config));
-        consoleApp.start(args);
+        ConsoleApp consoleApp = new ConsoleApp(Hazelcast.newHazelcastInstance(config), System.in, System.out);
+        consoleApp.start(args, false);
     }
 
 }
