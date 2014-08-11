@@ -60,7 +60,8 @@ public class AtomicLongTest extends HazelcastTestSupport {
         assertEquals(24, an.decrementAndGet());
         Assert.assertFalse(an.compareAndSet(23, 50));
         assertTrue(an.compareAndSet(24, 50));
-        assertTrue(an.compareAndSet(50, 0));
+        assertEquals(50, an.getAndIncrement());
+        assertTrue(an.compareAndSet(51, 0));
     }
 
     @Test
@@ -86,6 +87,19 @@ public class AtomicLongTest extends HazelcastTestSupport {
         }
         assertOpenEventually(countDownLatch, 50);
         assertEquals(0, atomicLong.get());
+    }
+
+    @Test()
+    @ClientCompatibleTest
+    public void testGet_whenCalledDestroy() {
+        HazelcastInstance hazelcastInstance = createHazelcastInstance();
+        IAtomicLong ref = hazelcastInstance.getAtomicLong("testGet_whenCalledDestroy");
+
+        for(int i=0; i<100; i++) {
+            ref.incrementAndGet();
+        }
+        ref.destroy();
+        assertEquals(0, ref.get());
     }
 
     @Test
